@@ -69,7 +69,7 @@ async def async_setup_entry(
                     )
                 )
 
-        for digital_io in range(2, 14):
+        for digital_io in range(2, 15):
             key = CONF_IO_DIGITAL_ + str(digital_io)
             value = config_entry.options.get(key)
             if value in [CONF_IO_DHT11, CONF_IO_DHT22]:
@@ -123,6 +123,7 @@ async def async_setup_entry(
                 translation_key="temperature",
                 translation_placeholders={"unit": unit},
                 device_class=SensorDeviceClass.TEMPERATURE,
+                state_class="measurement",
                 native_unit_of_measurement=UnitOfTemperature.CELSIUS,
             )
 

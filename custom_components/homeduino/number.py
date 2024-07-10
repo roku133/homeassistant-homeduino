@@ -50,7 +50,7 @@ async def async_setup_entry(
             name=config_entry.title,
         )
 
-        for digital_io in range(2, 14):
+        for digital_io in range(2, 15):
             key = CONF_IO_DIGITAL_ + str(digital_io)
             value = config_entry.options.get(key)
             _LOGGER.debug("key: %s, value: %s", key, value)
