@@ -123,6 +123,7 @@ async def async_setup_entry(
                 translation_key="temperature",
                 translation_placeholders={"unit": unit},
                 device_class=SensorDeviceClass.TEMPERATURE,
+                state_class="measurement",
                 native_unit_of_measurement=UnitOfTemperature.CELSIUS,
             )
 
