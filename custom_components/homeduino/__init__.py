@@ -14,11 +14,21 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeduino import (
     DEFAULT_BAUD_RATE,
     DEFAULT_RECEIVE_PIN,
+    DEFAULT_REPEATS,
     DEFAULT_SEND_PIN,
     Homeduino,
     HomeduinoError,
@@ -51,15 +61,33 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
 ]
 
+CONF_SERVICE_DEVICE_ID = "device_id"
 CONF_SERVICE_COMMAND = "command"
+CONF_SERVICE_PROTOCOL = "protocol"
+CONF_SERVICE_ID = "id"
+CONF_SERVICE_UNIT = "unit"
+CONF_SERVICE_STATE = "state"
+CONF_SERVICE_ALL = "all"
+CONF_SERVICE_REPEATS = "repeats"
 
 SERVICE_SEND_SCHEMA = vol.Schema(
     {
+        vol.Required(CONF_SERVICE_DEVICE_ID): cv.string,
         vol.Required(CONF_SERVICE_COMMAND): cv.string,
+    }
+)
+SERVICE_RAW_RF_SEND_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_SERVICE_COMMAND): cv.string,
+        vol.Optional(CONF_SERVICE_REPEATS, default=DEFAULT_REPEATS): NumberSelector(
+            NumberSelectorConfig(min=1, mode=NumberSelectorMode.BOX)
+        ),
     }
 )
 
 ALLOWED_FAILED_PINGS = 1
+
+_service_rf_send_schema: vol.Schema
 
 
 class HomeduinoCoordinator(DataUpdateCoordinator):
@@ -83,10 +111,10 @@ class HomeduinoCoordinator(DataUpdateCoordinator):
         )
         self._transceivers = {}
 
-    def add_transceiver(self, config_entry_id, transceiver: Homeduino):
+    def add_transceiver(self, device_id, transceiver: Homeduino):
         """Add a Homeduino transceiver."""
 
-        self._transceivers[config_entry_id] = transceiver
+        self._transceivers[device_id] = transceiver
         transceiver.add_rf_receive_callback(self.rf_receive_callback)
 
         self.async_set_updated_data(None)
@@ -94,8 +122,8 @@ class HomeduinoCoordinator(DataUpdateCoordinator):
     def has_transceiver(self):
         return len(self._transceivers) > 0
 
-    def get_transceiver(self, config_entry_id):
-        return self._transceivers.get(config_entry_id)
+    def get_transceiver(self, device_id):
+        return self._transceivers.get(device_id)
 
     def connected(self):
         if not self.has_transceiver():
@@ -104,10 +132,10 @@ class HomeduinoCoordinator(DataUpdateCoordinator):
         for transceiver in self._transceivers.values():
             return transceiver.connected()
 
-    async def remove_transceiver(self, config_entry_id):
-        transceiver = self._transceivers.get(config_entry_id)
+    async def remove_transceiver(self, device_id):
+        transceiver = self._transceivers.get(device_id)
         if transceiver is not None and await transceiver.disconnect():
-            self._transceivers.pop(config_entry_id)
+            self._transceivers.pop(device_id)
 
     @callback
     def rf_receive_callback(self, decoded) -> None:
@@ -122,20 +150,41 @@ class HomeduinoCoordinator(DataUpdateCoordinator):
         event_data = {**{"protocol": decoded["protocol"]}, **decoded["values"]}
         self.hass.bus.async_fire(f"{DOMAIN}_event", event_data)
 
-    async def rf_send(self, protocol: str, values):
+    async def rf_send(self, protocol: str, values, repeats=DEFAULT_REPEATS):
         if not self.has_transceiver():
             return False
 
+        success = False
         for transceiver in self._transceivers.values():
-            if not transceiver.connected() and not await transceiver.connect():
-                return False
+            if not transceiver.supports_rf_send():
+                continue
 
-            if await transceiver.rf_send(protocol, values):
+            if not transceiver.connected() and not await transceiver.connect():
+                continue
+
+            if await transceiver.rf_send(protocol, values, repeats):
                 self.async_set_updated_data({"protocol": protocol, "values": values})
 
-                return True
+                success = True
 
-        return False
+        return success
+
+    async def raw_rf_send(self, command: str, repeats=DEFAULT_REPEATS):
+        if not self.has_transceiver():
+            return False
+
+        success = False
+        for transceiver in self._transceivers.values():
+            if not transceiver.supports_rf_send():
+                continue
+
+            if not transceiver.connected() and not await transceiver.connect():
+                continue
+
+            if await transceiver.raw_rf_send(command, repeats) == "ACK":
+                success = True
+
+        return success
 
     async def send(self, config_entry_id, command):
         if not self.has_transceiver():
@@ -149,23 +198,6 @@ class HomeduinoCoordinator(DataUpdateCoordinator):
             return False
 
         return await transceiver.send(command)
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType):
-    """Set up is called when Home Assistant is loading our component."""
-
-    async def async_handle_send(call: ServiceCall):
-        """Handle the service call."""
-        command: str = call.data.get(CONF_SERVICE_COMMAND)
-
-        return await HomeduinoCoordinator.instance(hass).send(command.strip())
-
-    hass.services.async_register(
-        DOMAIN, "send", async_handle_send, schema=SERVICE_SEND_SCHEMA
-    )
-
-    # Return boolean to indicate that initialization was successful.
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -196,16 +228,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if not await homeduino.connect():
                 raise ConfigEntryNotReady(f"Unable to connect to device {serial_port}")
 
-            homeduino_coordinator.add_transceiver(entry.entry_id, homeduino)
-
             # Create the device if not exists
             device_registry = dr.async_get(hass)
-            device_registry.async_get_or_create(
+            device = device_registry.async_get_or_create(
                 config_entry_id=entry.entry_id,
                 identifiers={(DOMAIN, serial_port)},
                 manufacturer="pimatic",
-                name="Homeduino Transceiver",
+                name=entry.title,
+                model="transceiver",
             )
+
+            homeduino_coordinator.add_transceiver(device.id, homeduino)
+
+            hass.data.setdefault(DOMAIN, {})
+            hass.data[DOMAIN][entry.entry_id] = device.id
 
             _LOGGER.info("Homeduino transceiver on %s is available", serial_port)
         except serial.SerialException as ex:
@@ -217,12 +253,82 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 f"Unable to connect to Homeduino transceiver on {serial_port}"
             ) from ex
 
-        hass.data.setdefault(DOMAIN, {})
-        hass.data[DOMAIN][entry.entry_id] = homeduino
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
+
+    async def async_handle_send(call: ServiceCall):
+        """Handle the service call."""
+        device_id: str = call.data.get(CONF_SERVICE_DEVICE_ID)
+        command: str = call.data.get(CONF_SERVICE_COMMAND)
+
+        return await HomeduinoCoordinator.instance(hass).send(
+            device_id, command.strip()
+        )
+
+    async def async_handle_rf_send(call: ServiceCall):
+        """Handle the service call."""
+        protocol: str = call.data.get(CONF_SERVICE_PROTOCOL)
+        id_: int = int(call.data.get(CONF_SERVICE_ID))
+        unit: int = int(call.data.get(CONF_SERVICE_UNIT))
+        state: bool = bool(call.data.get(CONF_SERVICE_STATE))
+        all_: bool = bool(call.data.get(CONF_SERVICE_ALL))
+        repeats: int = int(call.data.get(CONF_SERVICE_REPEATS, DEFAULT_REPEATS))
+
+        return await HomeduinoCoordinator.instance(hass).rf_send(
+            protocol, {"id": id_, "unit": unit, "state": state, "all": all_}, repeats
+        )
+
+    async def async_handle_raw_rf_send(call: ServiceCall):
+        """Handle the service call."""
+        command: str = call.data.get(CONF_SERVICE_COMMAND)
+        repeats: int = int(call.data.get(CONF_SERVICE_REPEATS, DEFAULT_REPEATS))
+
+        return await HomeduinoCoordinator.instance(hass).raw_rf_send(command, repeats)
+
+    hass.services.async_register(
+        DOMAIN, "send", async_handle_send, schema=SERVICE_SEND_SCHEMA
+    )
+
+    protocol_names = Homeduino.get_protocols()
+    protocol_names = [
+        protocol_name
+        for protocol_name in protocol_names
+        if protocol_name.startswith(("switch", "dimmer", "pir", "weather"))
+    ]
+
+    _service_rf_send_schema = vol.Schema(
+        {
+            vol.Required(CONF_SERVICE_PROTOCOL, default=""): SelectSelector(
+                SelectSelectorConfig(
+                    options=protocol_names,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Required(CONF_SERVICE_ID): NumberSelector(
+                NumberSelectorConfig(min=0, mode=NumberSelectorMode.BOX)
+            ),
+            vol.Required(CONF_SERVICE_UNIT): NumberSelector(
+                NumberSelectorConfig(min=0, mode=NumberSelectorMode.BOX)
+            ),
+            vol.Required(CONF_SERVICE_STATE): cv.boolean,
+            vol.Optional(CONF_SERVICE_ALL): BooleanSelector(),
+            vol.Optional(CONF_SERVICE_REPEATS, default=DEFAULT_REPEATS): NumberSelector(
+                NumberSelectorConfig(min=1, mode=NumberSelectorMode.BOX)
+            ),
+        }
+    )
+
+    hass.services.async_register(
+        DOMAIN, "rf_send", async_handle_rf_send, schema=_service_rf_send_schema
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        "raw_rf_send",
+        async_handle_raw_rf_send,
+        schema=SERVICE_RAW_RF_SEND_SCHEMA,
+    )
 
     return True
 
@@ -232,7 +338,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry_type = entry.data.get(CONF_ENTRY_TYPE)
 
     if entry_type == CONF_ENTRY_TYPE_TRANSCEIVER:
-        await HomeduinoCoordinator.instance(hass).remove_transceiver(entry.entry_id)
+        device_id = hass.data[DOMAIN][entry.entry_id]
+        await HomeduinoCoordinator.instance(hass).remove_transceiver(device_id)
         if unload_ok := await hass.config_entries.async_unload_platforms(
             entry, PLATFORMS
         ):
@@ -248,7 +355,8 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     _LOGGER.debug("Configuration options updated, reloading Homeduino integration")
     entry_type = entry.data.get(CONF_ENTRY_TYPE)
     if entry_type == CONF_ENTRY_TYPE_TRANSCEIVER:
-        await HomeduinoCoordinator.instance(hass).remove_transceiver(entry.entry_id)
+        device_id = hass.data[DOMAIN][entry.entry_id]
+        await HomeduinoCoordinator.instance(hass).remove_transceiver(device_id)
     hass.config_entries.async_schedule_reload(entry.entry_id)
 
 

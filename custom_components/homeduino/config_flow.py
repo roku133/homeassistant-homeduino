@@ -8,7 +8,7 @@ from typing import Any
 
 import serial.tools.list_ports
 import voluptuous as vol
-from homeassistant import config_entries
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.const import CONF_TYPE
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
@@ -26,6 +26,7 @@ from homeduino import (
     BAUD_RATES,
     DEFAULT_BAUD_RATE,
     DEFAULT_RECEIVE_PIN,
+    DEFAULT_REPEATS,
     DEFAULT_SEND_PIN,
     Homeduino,
     HomeduinoNotReadyError,
@@ -50,7 +51,7 @@ _DIGITAL_IO_DEVICES = [
 ]
 
 
-class HomeduinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class HomeduinoConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Homeduino 433 MHz RF transceiver."""
 
     VERSION = 2
@@ -409,24 +410,22 @@ class HomeduinoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
+        config_entry: ConfigEntry,
+    ) -> OptionsFlow:
         """Create the options flow."""
-        return HomeduinoOptionsFlowHandler(config_entry)
+        return HomeduinoOptionsFlowHandler()
 
 
-class HomeduinoOptionsFlowHandler(config_entries.OptionsFlow):
+class HomeduinoOptionsFlowHandler(OptionsFlow):
     TRANSCEIVER_OPTIONS_SCHEMA = vol.Schema({})
     RF_DEVICE_OPTIONS_SCHEMA = vol.Schema(
         {
             vol.Optional(CONF_RF_ID_IGNORE_ALL): BooleanSelector(),
+            vol.Optional(CONF_RF_REPEATS, default=DEFAULT_REPEATS): NumberSelector(
+                NumberSelectorConfig(min=1, step=1, mode=NumberSelectorMode.BOX)
+            ),
         }
     )
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        _LOGGER.debug(config_entry.data)
-        self.config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -516,6 +515,12 @@ class HomeduinoOptionsFlowHandler(config_entries.OptionsFlow):
 
         if user_input is not None:
             data_schema(user_input)
+
+            if entry_type == CONF_ENTRY_TYPE_RF_DEVICE:
+                user_input[CONF_RF_REPEATS] = int(
+                    user_input.get(CONF_RF_REPEATS, DEFAULT_REPEATS)
+                )
+
             return self.async_create_entry(title="", data=user_input)
 
         if user_input is not None:

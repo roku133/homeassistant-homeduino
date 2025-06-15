@@ -1,67 +1,67 @@
 send:
-  name: Send command
-  description: Sends a command to Homeduino.
   fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: homeduino
+          filter:
+            - integration: homeduino
+              model: transceiver
     command:
-      name: Command
-      description: A command to send.
       required: true
       example: "RF send 4 3 453 1992 88 9228 0 0 0 0 01020102020201020101010101010102010101010202010202020202010102010102020203"
       selector:
         text:
 rf_send:
-  name: Send RF command
-  description: Sends an RF command.
   fields:
     protocol:
-      name: Protocol
-      description: The protocol to use.
       required: true
-      example:
-        protocol: switch1
+      example: switch1
       selector:
         text:
     id:
-      name: Command
-      description: A command to send.
       required: true
-      example:
-        id: 5
+      example: 5
       selector:
-        text:
+        number:
+          min: 0
+          mode: box
     unit:
-      name: Command
-      description: A command to send.
       required: true
-      example:
-        unit: 12
+      example: 12
       selector:
-        text:
+        number:
+          min: 0
+          mode: box
     state:
-      name: Command
-      description: A command to send.
       required: true
-      example:
-        state: true
-      selector:
-        text:
-    all:
-      name: Command
-      description: A command to send.
-      required: true
-      example:
-        all: true
+      example: true
       selector:
         boolean:
+    all:
+      required: true
+      example: true
+      selector:
+        boolean:
+    repeats:
+      required: false
+      example: 7
+      selector:
+        number:
+          min: 1
+          mode: box
 raw_rf_send:
-  name: Send raw RF command
-  description: Sends a raw RF command.
   fields:
     command:
-      name: Command
-      description: A command to send.
       required: true
       example: "453 1992 88 9228 0 0 0 0 01020102020201020101010101010102010101010202010202020202010102010102020203"
       selector:
         text:
-    
+    repeats:
+      required: false
+      example: 7
+      selector:
+        number:
+          min: 1
+          mode: box
