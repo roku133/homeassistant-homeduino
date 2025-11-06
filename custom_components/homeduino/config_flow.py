@@ -181,6 +181,20 @@ class HomeduinoConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
 
+        self._step_setup_serial_schema = self._step_setup_serial_schema.extend(
+            {
+                vol.Optional(
+                    CONF_IO_DIGITAL_ + "14", default=CONF_IO_NONE
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[CONF_IO_NONE] + _DIGITAL_IO_DEVICES,
+                        mode=SelectSelectorMode.DROPDOWN,
+                        translation_key="digital_io",
+                    )
+                ),
+            }
+        )
+
         for analog_input in range(0, 8):
             self._step_setup_serial_schema = self._step_setup_serial_schema.extend(
                 {vol.Optional(CONF_IO_ANALOG_ + str(analog_input)): BooleanSelector()}
@@ -260,7 +274,7 @@ class HomeduinoConfigFlow(ConfigFlow, domain=DOMAIN):
 
         options = {}
 
-        for digital_io in range(2, 14):
+        for digital_io in range(2, 15):
             key = CONF_IO_DIGITAL_ + str(digital_io)
             value = data.get(key)
             if value == CONF_IO_NONE:
@@ -467,6 +481,20 @@ class HomeduinoOptionsFlowHandler(OptionsFlow):
                                 CONF_IO_RF_SEND,
                                 CONF_IO_DIGITAL_OUTPUT,
                             ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                            translation_key="digital_io",
+                        )
+                    ),
+                }
+            )
+
+            data_schema = data_schema.extend(
+                {
+                    vol.Optional(
+                        CONF_IO_DIGITAL_ + "14", default=CONF_IO_NONE
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[CONF_IO_NONE] + _DIGITAL_IO_DEVICES,
                             mode=SelectSelectorMode.DROPDOWN,
                             translation_key="digital_io",
                         )
